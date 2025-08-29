@@ -1,0 +1,13 @@
+# Python virtual envs
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets (never push these)
+.streamlit/secrets.toml
+.env
+
+# Data files
+*.xlsx
+*.xls
+*.csv

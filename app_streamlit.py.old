@@ -1,0 +1,110 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import io, os
+from dotenv import load_dotenv
+load_dotenv()  # Load .env so OPENAI_API_KEY is available
+
+from augmented_maxdiff import augment_maxdiff, augment_maxdiff_llm
+
+st.set_page_config(page_title="Augmented MaxDiff Imputer", page_icon="✅", layout="wide")
+
+CUSTOM_CSS = """
+<style>
+html, body, [class*="css"]  { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+.app-header { display:flex; align-items:center; gap:12px; padding:8px 0 24px; border-bottom:1px solid #eee; margin-bottom:18px;}
+.badge {padding:4px 8px; border-radius:999px; font-size:12px; background:#eef6ff; color:#1e66f5; border:1px solid #cfe3ff;}
+.metric {border-radius:14px; padding:14px; background:#fafafa; border:1px dashed #ddd;}
+.download-box {border:1px solid #16a34a33; background:#16a34a0d; border-radius:16px; padding:16px;}
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+st.markdown("""
+<div class="app-header">
+  <h2 style="margin:0;">🧠 Augmented Data Generation for MaxDiff</h2>
+  <span class="badge">Heuristic + Optional AI Mode</span>
+</div>
+""", unsafe_allow_html=True)
+
+with st.sidebar:
+    st.header("① Upload Data")
+    uploaded = st.file_uploader("Excel file (.xlsx) with stacked MaxDiff rows", type=["xlsx"])
+    sheet_name = st.text_input("Sheet name or index (default = 0)", value="0")
+    if sheet_name.isdigit(): sheet = int(sheet_name)
+    else: sheet = sheet_name
+
+    st.markdown("---")
+    st.header("② Choose Mode(s)")
+    use_heuristic = st.checkbox("Heuristic mode (deterministic, no API key)", value=True)
+    use_llm = st.checkbox("AI (LLM) mode", value=False)
+    if use_llm:
+        has_key = bool(os.environ.get("OPENAI_API_KEY",""))
+        st.caption("Using .env/ENV variable OPENAI_API_KEY. Detected: " + ("✅" if has_key else "❌"))
+    st.markdown("---")
+    st.header("③ Run")
+    run_btn = st.button("Run Imputation", type="primary")
+    st.markdown("---")
+    st.header("Options")
+    method_label = st.text_input("Heuristic method label", value="heuristic-maxdiff-v1")
+    llm_model = st.text_input("LLM model (if AI mode enabled)", value="gpt-4o-mini")
+
+if uploaded is not None:
+    try:
+        xl = pd.ExcelFile(uploaded)
+        st.caption(f"Detected sheets: {', '.join(map(str, xl.sheet_names))}")
+    except Exception as e:
+        st.error(f"Failed to read Excel file: {e}")
+
+    try:
+        preview_df = pd.read_excel(uploaded, sheet_name=sheet if str(sheet_name).strip() else 0, nrows=50)
+        st.subheader("Preview (first 50 rows)")
+        st.dataframe(preview_df, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Could not preview selected sheet: {e}")
+
+    if run_btn:
+        if not (use_heuristic or use_llm):
+            st.warning("Select at least one mode."); st.stop()
+        with st.spinner("Imputing missing Best/Worst values..."):
+            tmp_in = "tmp_input.xlsx"
+            with open(tmp_in, "wb") as f:
+                f.write(uploaded.getbuffer())
+            results = []
+            if use_heuristic:
+                tmp_out_h = "tmp_out_heur.xlsx"
+                try:
+                    heur_df = augment_maxdiff(tmp_in, tmp_out_h, sheet_name=sheet, method_label=method_label or "heuristic-maxdiff-v1")
+                    results.append(("Heuristic", heur_df))
+                except Exception as e:
+                    st.error(f"Heuristic mode failed: {e}")
+            if use_llm:
+                tmp_out_l = "tmp_out_llm.xlsx"
+                try:
+                    llm_df = augment_maxdiff_llm(tmp_in, tmp_out_l, sheet_name=sheet, model=llm_model or "gpt-4o-mini")
+                    results.append(("AI (LLM)", llm_df))
+                except Exception as e:
+                    st.error(f"AI (LLM) mode failed (check API key in .env): {e}")
+            if not results: st.stop()
+            for label, out_df in results:
+                total_rows = len(out_df)
+                imputed_rows = int(out_df["imputed_flag"].sum()) if "imputed_flag" in out_df.columns else 0
+                observed_rows = total_rows - imputed_rows
+                st.subheader(f"{label} — Result Metrics")
+                c1, c2, c3 = st.columns(3)
+                c1.markdown(f'<div class="metric"><b>Total rows</b><br/>{total_rows}</div>', unsafe_allow_html=True)
+                c2.markdown(f'<div class="metric"><b>Observed rows</b><br/>{observed_rows}</div>', unsafe_allow_html=True)
+                c3.markdown(f'<div class="metric"><b>Imputed rows</b><br/>{imputed_rows}</div>', unsafe_allow_html=True)
+                st.dataframe(out_df.head(50), use_container_width=True)
+            towrite = io.BytesIO()
+            with pd.ExcelWriter(towrite, engine="xlsxwriter") as writer:
+                for label, out_df in results:
+                    sheetname = "heuristic" if label.startswith("Heuristic") else "llm"
+                    out_df.to_excel(writer, index=False, sheet_name=sheetname)
+            towrite.seek(0)
+            st.markdown('<div class="download-box">✅ Done. Download the Excel with one sheet per selected mode.</div>', unsafe_allow_html=True)
+            st.download_button("⬇️ Download completed_maxdiff.xlsx", data=towrite,
+                               file_name="completed_maxdiff.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+else:
+    st.info("Upload a stacked MaxDiff Excel to begin.")
