@@ -4,8 +4,11 @@ st.set_page_config(page_title="Augmented MaxDiff Imputer", page_icon="✅", layo
 import pandas as pd
 import numpy as np
 import io, os
-from dotenv import load_dotenv
-load_dotenv()  # so OPENAI_API_KEY from .env is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # loads .env locally; harmless on Cloud
+except Exception:
+    pass  # if python-dotenv is missing, continue (Cloud can use st.secrets)
 
 # --- AUTH ---
 import streamlit_authenticator as stauth
